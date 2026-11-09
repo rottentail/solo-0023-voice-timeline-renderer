@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "name": "solo-0023-voice-timeline-renderer",
+  "project_shape": "backend",
+  "summary": "HTTP service for validated PCM WAV ingestion, assembly timelines, and normalized mixdowns.",
+  "modules": [
+    {
+      "id": "httpapi",
+      "path": "internal/httpapi",
+      "responsibility": "Public HTTP routes, request limits, JSON errors, and media responses."
+    },
+    {
+      "id": "service",
+      "path": "internal/service",
+      "responsibility": "Workflow orchestration and render lifecycle coordination."
+    },
+    {
+      "id": "domain",
+      "path": "internal/domain",
+      "responsibility": "Entities, validation rules, stable errors, and state transitions."
+    },
+    {
+      "id": "audiocodec",
+      "path": "internal/audiocodec",
+      "responsibility": "PCM WAV decoding and encoding, resampling, channel mapping, and metrics."
+    },
+    {
+      "id": "render",
+      "path": "internal/render",
+      "responsibility": "Timeline evaluation, crossfade mixing, normalization, and receipts."
+    },
+    {
+      "id": "storage",
+      "path": "internal/storage",
+      "responsibility": "Concurrent-safe atomic persistence for media and metadata."
+    }
+  ],
+  "complexity": {
+    "mechanisms": [
+      "state_transition",
+      "error_propagation",
+      "resource_lifecycle",
+      "concurrency"
+    ]
+  },
+  "workflows": [
+    {
+      "id": "ingest-audio-source",
+      "name": "Register audio source",
+      "entry": "PUT /v1/sources/{source_id}",
+      "steps": [
+        "Apply request size and identity validation",
+        "Decode PCM WAV and measure the signal",
+        "Atomically persist media and metadata"
+      ],
+      "success": "Returns immutable source metadata that can be read back.",
+      "failure": "Returns a stable validation error and leaves no visible source.",
+      "verification": "The workflow check registers a generated WAV, reads it back, and rejects a malformed payload.",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "domain",
+        "audiocodec",
+        "storage"
+      ]
+    },
+    {
+      "id": "compose-timeline",
+      "name": "Compose assembly timeline",
+      "entry": "PUT /v1/timelines/{timeline_id}",
+      "steps": [
+        "Validate span count, ranges, gain, and crossfade constraints",
+        "Resolve source references from storage",
+        "Persist a ready timeline only after all spans pass"
+      ],
+      "success": "Returns a ready timeline with stable source references.",
+      "failure": "Returns the first stable timeline validation error without partial persistence.",
+      "verification": "The workflow check composes a valid two-span timeline and rejects an impossible crossfade.",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "domain",
+        "storage"
+      ]
+    },
+    {
+      "id": "render-mixdown",
+      "name": "Render timeline mixdown",
+      "entry": "PUT /v1/renders/{render_id}",
+      "steps": [
+        "Create and advance a durable render job",
+        "Resample, map channels, apply gains and fades, then crossfade spans",
+        "Normalize, atomically commit output and receipt, and complete the job"
+      ],
+      "success": "Returns a completed job whose WAV and receipt match.",
+      "failure": "Returns a terminal failed job with a stable error code and no partial output.",
+      "verification": "The workflow check renders a crossfaded timeline, decodes the result, and compares receipt measurements.",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "domain",
+        "audiocodec",
+        "render",
+        "storage"
+      ]
+    }
+  ]
+}

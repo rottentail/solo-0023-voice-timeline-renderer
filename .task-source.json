@@ -1,0 +1,210 @@
+{
+  "task_source_schema_version": 1,
+  "cc_feedback_profile": "cc-feedback-2611",
+  "project_domain": "游戏、图形与多媒体",
+  "project_subdirection": "音视频处理",
+  "supported_task_types": [
+    "功能开发",
+    "Bugfix",
+    "代码重构",
+    "功能优化",
+    "质量保障",
+    "项目维护",
+    "问题排查与诊断"
+  ],
+  "entities": [
+    {
+      "id": "source_asset",
+      "label": "Source asset",
+      "relations": [
+        "timeline_span.references.source_asset",
+        "render_job.consumes.source_asset"
+      ],
+      "invariants": [
+        "PCM 16-bit mono or stereo only",
+        "Stored digest and measurements describe immutable media bytes",
+        "Frame-aligned source intervals never exceed the decoded frame count"
+      ]
+    },
+    {
+      "id": "timeline",
+      "label": "Assembly timeline",
+      "relations": [
+        "timeline.contains.timeline_span",
+        "render_job.executes.timeline"
+      ],
+      "invariants": [
+        "At least one span exists",
+        "The first span has no crossfade",
+        "Neighbor crossfade does not exceed either span duration"
+      ]
+    },
+    {
+      "id": "render_job",
+      "label": "Render job",
+      "relations": [
+        "render_job.executes.timeline",
+        "render_job.produces.render_receipt"
+      ],
+      "invariants": [
+        "Completed and failed are terminal",
+        "A completed job has output metadata and a receipt",
+        "A failed job never exposes a partial published output"
+      ]
+    },
+    {
+      "id": "render_receipt",
+      "label": "Render receipt",
+      "relations": [
+        "render_receipt.belongs_to.render_job"
+      ],
+      "invariants": [
+        "Receipt digest matches published output bytes",
+        "Measured peak respects the requested normalization target tolerance"
+      ]
+    }
+  ],
+  "state_machines": [
+    {
+      "subject": "render_job",
+      "states": [
+        "queued",
+        "rendering",
+        "finalizing",
+        "completed",
+        "failed"
+      ],
+      "transitions": [
+        "queued->rendering",
+        "rendering->finalizing",
+        "finalizing->completed",
+        "queued->failed",
+        "rendering->failed",
+        "finalizing->failed"
+      ],
+      "invariants": [
+        "completed cannot return to an active state",
+        "failed stores a stable error code and message",
+        "only completed jobs resolve output and receipt resources"
+      ]
+    },
+    {
+      "subject": "timeline",
+      "states": [
+        "validating",
+        "ready"
+      ],
+      "transitions": [
+        "validating->ready"
+      ],
+      "invariants": [
+        "ready timelines have only resolvable source references",
+        "failed validation never persists a record"
+      ]
+    }
+  ],
+  "capability_families": [
+    {
+      "family": "PCM WAV ingestion",
+      "occupied_by": [
+        "wav_decoder",
+        "signal_measurement"
+      ],
+      "available": false
+    },
+    {
+      "family": "Timeline validation",
+      "occupied_by": [
+        "timeline_rules",
+        "crossfade_bounds"
+      ],
+      "available": false
+    },
+    {
+      "family": "Audio assembly",
+      "occupied_by": [
+        "linear_resampling",
+        "channel_mapping",
+        "equal_power_crossfade"
+      ],
+      "available": false
+    },
+    {
+      "family": "Amplitude control",
+      "occupied_by": [
+        "peak_normalization"
+      ],
+      "available": false
+    },
+    {
+      "family": "Render lifecycle",
+      "occupied_by": [
+        "durable_state_transitions",
+        "atomic_media_publication"
+      ],
+      "available": false
+    },
+    {
+      "family": "Dynamics processing",
+      "occupied_by": [],
+      "available": true
+    },
+    {
+      "family": "Timed caption pipeline",
+      "occupied_by": [],
+      "available": true
+    },
+    {
+      "family": "Additional container adapters",
+      "occupied_by": [],
+      "available": true
+    }
+  ],
+  "extension_seams": [
+    {
+      "id": "codec-boundary",
+      "anchor": "internal/audiocodec DecodeWAV and EncodePCM16",
+      "entry": "PUT /v1/sources/{source_id}",
+      "distinct_outcome": "Additional integer PCM layouts can be admitted without changing timeline or storage contracts.",
+      "mechanism": "validation_boundary"
+    },
+    {
+      "id": "render-stage-pipeline",
+      "anchor": "internal/render RenderTimeline stage sequence",
+      "entry": "PUT /v1/renders/{render_id}",
+      "distinct_outcome": "A dynamics stage or alternate amplitude target can change output while preserving job and receipt contracts.",
+      "mechanism": "deterministic_transform"
+    },
+    {
+      "id": "timeline-span-schema",
+      "anchor": "internal/domain TimelineSpan validation and render span evaluation",
+      "entry": "PUT /v1/timelines/{timeline_id}",
+      "distinct_outcome": "Automation curves or cue markers can be added as span metadata with observable placement changes.",
+      "mechanism": "schema_extension"
+    },
+    {
+      "id": "repository-boundary",
+      "anchor": "internal/storage Repository interface used by service workflows",
+      "entry": "source, timeline, and render service methods",
+      "distinct_outcome": "A transactional repository can replace local file persistence without changing HTTP contracts.",
+      "mechanism": "storage_boundary"
+    }
+  ],
+  "tension_points": [
+    {
+      "workflow_id": "ingest-audio-source",
+      "description": "Strict format acceptance versus salvaging a partially readable media payload",
+      "observable_failure": "A malformed or truncated WAV becomes visible as a source, or measured frame metadata disagrees with stored bytes."
+    },
+    {
+      "workflow_id": "compose-timeline",
+      "description": "Honoring an aggressive crossfade request versus keeping both source intervals and neighbor bounds intact",
+      "observable_failure": "An impossible crossfade is silently clamped, causing a timeline duration or sample placement different from the stored plan."
+    },
+    {
+      "workflow_id": "render-mixdown",
+      "description": "Reaching a requested peak target versus preserving headroom and publishing only self-consistent files",
+      "observable_failure": "The receipt claims the target peak while output samples clip, or a failed render leaves a downloadable partial file."
+    }
+  ]
+}

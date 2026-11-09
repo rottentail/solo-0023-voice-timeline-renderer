@@ -1,0 +1,23 @@
+{
+  "language": "Go",
+  "project_shape": "backend",
+  "source_extensions": [
+    ".go"
+  ],
+  "build_command": "go build ./...",
+  "testing": "deferred",
+  "workflow_checks": [
+    {
+      "workflow_id": "ingest-audio-source",
+      "command": "go run ./cmd/timelinecheck -workflow ingest-audio-source"
+    },
+    {
+      "workflow_id": "compose-timeline",
+      "command": "go run ./cmd/timelinecheck -workflow compose-timeline"
+    },
+    {
+      "workflow_id": "render-mixdown",
+      "command": "go run ./cmd/timelinecheck -workflow render-mixdown"
+    }
+  ]
+}
