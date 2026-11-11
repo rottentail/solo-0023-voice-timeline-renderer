@@ -1,6 +1,7 @@
 package checkflow
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -70,6 +71,74 @@ func runIngest(ctx context.Context, harness *Harness) error {
 	}
 	if status != 404 || missing.ID != "" {
 		return fmt.Errorf("failed source became visible: status=%d id=%s", status, missing.ID)
+	}
+
+	// The waveform surface must describe the same immutable source facts at a
+	// requested timeline rate, remain byte-for-byte stable across reads, and
+	// keep out-of-range requests distinct from true silence.
+	query := "buckets=128&sample_rate=24000"
+	summary, status, body, err := harness.getWaveform(ctx, asset.ID, query)
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("waveform read returned status %d", status)
+	}
+	if summary.BucketCount != 128 || len(summary.Buckets) != 128 ||
+		summary.SourceFrameCount != asset.FrameCount ||
+		summary.SourceSampleRate != 48000 || summary.SampleRate != 24000 ||
+		summary.OutputFrames != 6000 {
+		return fmt.Errorf("waveform metadata is inconsistent: %+v", summary)
+	}
+	if summary.Silent {
+		return fmt.Errorf("non-silent source was reported as silent")
+	}
+	if math.Abs(summary.SourcePeakDBFS-asset.PeakDBFS) > 1e-9 ||
+		math.Abs(summary.PeakDBFS-asset.PeakDBFS) > 1e-9 {
+		return fmt.Errorf("waveform peak facts disagree with source metadata: summary=%.6f source=%.6f", summary.PeakDBFS, asset.PeakDBFS)
+	}
+	if summary.Min > -0.35 || summary.Max < 0.35 {
+		return fmt.Errorf("waveform range [%.6f, %.6f] does not contain the generated amplitude", summary.Min, summary.Max)
+	}
+	_, status, repeated, err := harness.getWaveform(ctx, asset.ID, query)
+	if err != nil {
+		return err
+	}
+	if status != 200 || !bytes.Equal(body, repeated) {
+		return fmt.Errorf("repeated waveform read is not stable: status=%d", status)
+	}
+
+	rangeSummary, status, _, err := harness.getWaveform(ctx, asset.ID, "start_frame=1000&end_frame=6000&buckets=5&sample_rate=48000")
+	if err != nil {
+		return err
+	}
+	if status != 200 || rangeSummary.StartFrame != 1000 || rangeSummary.EndFrame != 6000 ||
+		rangeSummary.OutputFrames != 5000 || len(rangeSummary.Buckets) != 5 ||
+		rangeSummary.Buckets[0].StartFrame != 1000 || rangeSummary.Buckets[4].EndFrame != 6000 {
+		return fmt.Errorf("sub-range waveform does not match the requested bounds: %+v", rangeSummary)
+	}
+
+	_, status, errorBody, err := harness.getWaveform(ctx, asset.ID, "end_frame=12001")
+	if err != nil {
+		return err
+	}
+	if status != 422 || failureCode(errorBody) != "waveform_range_out_of_bounds" {
+		return fmt.Errorf("out-of-range waveform returned status=%d code=%s", status, failureCode(errorBody))
+	}
+
+	silentWAV, err := sineWAV(48000, 1, 100, 440, 0)
+	if err != nil {
+		return err
+	}
+	if _, status, err := harness.createSource(ctx, "source_ingest_silence", "silent take", silentWAV); err != nil || status != 201 {
+		return fmt.Errorf("silent source setup failed: status=%d err=%v", status, err)
+	}
+	silent, status, _, err := harness.getWaveform(ctx, "source_ingest_silence", "buckets=8")
+	if err != nil {
+		return err
+	}
+	if status != 200 || !silent.Silent || silent.Min != 0 || silent.Max != 0 || silent.PeakDBFS != -120 {
+		return fmt.Errorf("true silence was not distinguished: status=%d summary=%+v", status, silent)
 	}
 	return nil
 }

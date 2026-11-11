@@ -8,6 +8,8 @@ and records every render transition.
 The implementation covers:
 
 - 16-bit integer PCM WAV validation and signal measurement.
+- Deterministic, client-independent waveform peak summaries for registered
+  sources at any frame range and timeline target sample rate.
 - Ordered timeline spans with source-frame selection, gain, and crossfade.
 - Linear sample-rate conversion and mono/stereo channel mapping.
 - Equal-power neighboring-span crossfades.
@@ -86,6 +88,87 @@ Response:
 }
 ```
 
+### Read a source waveform summary
+
+`GET /v1/sources/{source_id}/waveform`
+
+The aliases `/waveform-summary` and `/peaks` resolve to the same handler.
+
+Query parameters are optional; omitted values come from the immutable source
+metadata:
+
+- `start_frame`: first source frame in the half-open range, default `0`.
+- `end_frame`: exclusive source frame bound, default the source frame count.
+- `sample_rate`: timeline target sample rate, default the source sample rate.
+  It must be 8000-192000.
+- `buckets`: number of equal-time envelope buckets, default `256` (capped by
+  the range length). An explicit value must be 1-4096 and cannot exceed the
+  requested source frame range.
+
+Example:
+
+```text
+GET /v1/sources/opening_take_01/waveform?start_frame=0&end_frame=48000&sample_rate=24000&buckets=128
+```
+
+Response:
+
+```json
+{
+  "schema_version": 1,
+  "source_id": "opening_take_01",
+  "source_digest": "b7c0...",
+  "source_sample_rate": 48000,
+  "source_frame_count": 48000,
+  "source_peak_dbfs": -8.0,
+  "start_frame": 0,
+  "end_frame": 48000,
+  "sample_rate": 24000,
+  "output_frames": 24000,
+  "bucket_count": 128,
+  "silent": false,
+  "min": -0.398,
+  "max": 0.398,
+  "peak_dbfs": -8.0,
+  "buckets": [
+    {
+      "start_frame": 0,
+      "end_frame": 375,
+      "output_start_frame": 0,
+      "output_end_frame": 187,
+      "min": -0.284,
+      "max": 0.284
+    }
+  ]
+}
+```
+
+Each bucket reports the exact lowest and highest decoded sample amplitude in
+its slice, across all channels. Values are never gained, normalized, clipped,
+or resampled, so the summary cannot invent or hide source peaks. Bucket
+boundaries are equal fractions of the requested time range, independent of
+the target rate; `sample_rate` only determines the `output_*` labels and
+`output_frames`, using the same rounding rule as timeline resampling.
+
+Responses are deterministic and byte-stable for the same request. A compact
+full-range envelope is persisted with the source at registration and reused
+when its bucket boundaries divide evenly; any other request is rebuilt from
+the immutable media bytes. Concurrent reads and renders therefore observe the
+same values.
+
+Failure modes remain distinct:
+
+- An empty or malformed range returns `invalid_frame_range`.
+- A range outside the source frame count returns
+  `waveform_range_out_of_bounds`; it is never clamped to the source duration.
+- An unreadable stored payload returns `source_decode_failed`, while a digest
+  disagreement returns `source_integrity_error`.
+- A genuinely silent range returns HTTP 200 with `silent: true`,
+  `min: 0`, `max: 0`, and `peak_dbfs: -120`.
+
+This endpoint does not alter source metadata, the rendered WAV download, or
+the render receipt interface.
+
 ### Compose a timeline
 
 `PUT /v1/timelines/{timeline_id}`
@@ -137,6 +220,7 @@ output folder.
 ### Read resources
 
 - `GET /v1/sources/{source_id}`
+- `GET /v1/sources/{source_id}/waveform`
 - `GET /v1/timelines/{timeline_id}`
 - `GET /v1/renders/{render_id}`
 - `GET /v1/renders/{render_id}/receipt`
@@ -153,6 +237,7 @@ var/voice-timeline/
   sources/<source_id>/
     source.wav
     metadata.json
+    waveform.json
   timelines/<timeline_id>.json
   jobs/<render_id>.json
   renders/<render_id>/

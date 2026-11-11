@@ -41,6 +41,23 @@ Invariants:
 - The digest and signal measurements describe the exact bytes stored.
 - Decoded payloads are bounded by configured byte and duration limits.
 
+### Waveform summary
+
+A waveform summary is a deterministic high/low peak envelope for a half-open
+frame range of an existing immutable source, mapped to a requested timeline
+sample rate.
+
+Invariants:
+
+- Bucket amplitudes are measured from decoded source samples, never from a
+  normalized render or an interpolation approximation.
+- Out-of-range requests are rejected rather than clamped, so the summary
+  cannot change the effective source duration.
+- A genuinely silent range is a successful summary with `silent: true`, not a
+  decode or validation failure.
+- The same request returns the same values across repeated and concurrent
+  reads; persisted caches are bound to the source digest and can be rebuilt.
+
 ### Assembly timeline
 
 A timeline is an ordered set of spans over existing source assets. A span
@@ -127,6 +144,7 @@ receipt. Failure is observable through the terminal job error code.
 - `GET /healthz`
 - `PUT /v1/sources/{source_id}`
 - `GET /v1/sources/{id}`
+- `GET /v1/sources/{id}/waveform`
 - `PUT /v1/timelines/{timeline_id}`
 - `GET /v1/timelines/{id}`
 - `PUT /v1/renders/{render_id}`

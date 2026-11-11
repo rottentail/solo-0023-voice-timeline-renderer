@@ -53,6 +53,28 @@ func (harness *Harness) getSource(
 	return asset, status, nil
 }
 
+func (harness *Harness) getWaveform(
+	ctx context.Context,
+	id string,
+	query string,
+) (domain.WaveformSummary, int, []byte, error) {
+	path := "/v1/sources/" + id + "/waveform"
+	if query != "" {
+		path += "?" + query
+	}
+	status, body, err := harness.requestJSON(ctx, "GET", path, nil)
+	if err != nil {
+		return domain.WaveformSummary{}, status, body, err
+	}
+	var summary domain.WaveformSummary
+	if status == 200 {
+		if err := decodeBody(body, &summary); err != nil {
+			return domain.WaveformSummary{}, status, body, err
+		}
+	}
+	return summary, status, body, nil
+}
+
 func (harness *Harness) createTimeline(
 	ctx context.Context,
 	id string,

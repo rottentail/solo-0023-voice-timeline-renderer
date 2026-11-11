@@ -79,6 +79,13 @@ func (s *Service) CreateSource(ctx context.Context, id string, request SourceWri
 		RMSDBFS:       measurements.RMSDBFS,
 		CreatedAt:     time.Now().UTC(),
 	}
+	canonical := canonicalWaveformSummary(asset, clip)
+	if store, ok := s.repo.(sourceWaveformStore); ok {
+		if err := store.SaveSourceWithWaveform(asset, payload, canonical); err != nil {
+			return domain.SourceAsset{}, false, err
+		}
+		return asset, true, nil
+	}
 	if err := s.repo.SaveSource(asset, payload); err != nil {
 		return domain.SourceAsset{}, false, err
 	}

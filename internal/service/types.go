@@ -19,6 +19,18 @@ type Repository interface {
 	GetRenderOutput(string) ([]byte, domain.RenderReceipt, error)
 }
 
+// sourceWaveformStore and sourceWaveformReader are optional repository
+// extensions. When a repository implements them, waveform summaries are
+// persisted and reused; otherwise they are deterministically rebuilt from the
+// immutable media bytes already served by the base Repository interface.
+type sourceWaveformStore interface {
+	SaveSourceWithWaveform(domain.SourceAsset, []byte, *domain.WaveformSummary) error
+}
+
+type sourceWaveformReader interface {
+	GetSourceWaveform(domain.SourceAsset) (domain.WaveformSummary, bool)
+}
+
 type Config struct {
 	MaxSourceBytes  int64
 	MaxSpans        int

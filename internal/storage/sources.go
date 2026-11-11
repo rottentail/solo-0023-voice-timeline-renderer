@@ -11,6 +11,25 @@ import (
 )
 
 func (repo *Repository) SaveSource(asset domain.SourceAsset, wav []byte) error {
+	return repo.saveSource(asset, wav, nil)
+}
+
+// SaveSourceWithWaveform commits media, metadata, and an optional full-range
+// waveform cache in one directory rename. The source folder therefore remains
+// immutable: readers see either the complete registration or nothing.
+func (repo *Repository) SaveSourceWithWaveform(
+	asset domain.SourceAsset,
+	wav []byte,
+	summary *domain.WaveformSummary,
+) error {
+	return repo.saveSource(asset, wav, summary)
+}
+
+func (repo *Repository) saveSource(
+	asset domain.SourceAsset,
+	wav []byte,
+	summary *domain.WaveformSummary,
+) error {
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
 
@@ -33,6 +52,11 @@ func (repo *Repository) SaveSource(asset domain.SourceAsset, wav []byte) error {
 	if err := writeJSONAtomic(filepath.Join(temp, "metadata.json"), asset, 0o640); err != nil {
 		return domain.Wrap(domain.KindInternal, "storage_error", "", "cannot write source metadata", err)
 	}
+	if summary != nil {
+		if err := writeJSONAtomic(filepath.Join(temp, "waveform.json"), summary, 0o640); err != nil {
+			return domain.Wrap(domain.KindInternal, "storage_error", "", "cannot write source waveform summary", err)
+		}
+	}
 	if err := os.Rename(temp, final); err != nil {
 		return domain.Wrap(domain.KindInternal, "storage_error", "", "cannot commit source", err)
 	}
@@ -53,6 +77,26 @@ func (repo *Repository) GetSourceMeta(id string) (domain.SourceAsset, error) {
 		return domain.SourceAsset{}, domain.Wrap(domain.KindInternal, "storage_error", "", "cannot read source metadata", err)
 	}
 	return asset, nil
+}
+
+// GetSourceWaveform reads the persisted full-range cache. A missing, corrupt,
+// or stale cache is reported as a miss so the caller can rebuild it from the
+// immutable media bytes; it never fabricates source facts.
+func (repo *Repository) GetSourceWaveform(asset domain.SourceAsset) (domain.WaveformSummary, bool) {
+	repo.mu.RLock()
+	defer repo.mu.RUnlock()
+	var summary domain.WaveformSummary
+	if err := readJSON(repo.path("sources", asset.ID, "waveform.json"), &summary); err != nil {
+		return domain.WaveformSummary{}, false
+	}
+	if summary.SchemaVersion != 1 ||
+		summary.SourceID != asset.ID ||
+		summary.SourceDigest != asset.Digest ||
+		summary.SourceSampleRate != asset.SampleRate ||
+		summary.SourceFrameCount != asset.FrameCount {
+		return domain.WaveformSummary{}, false
+	}
+	return summary, true
 }
 
 func (repo *Repository) GetSource(id string) (domain.SourceAsset, []byte, error) {
