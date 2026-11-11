@@ -51,8 +51,19 @@ func buildReceipt(
 			CrossfadeFrames:  span.CrossfadeFrames,
 			GainDB:           span.GainDB,
 			ChannelAction:    span.ChannelAction,
+			ChannelMatrix:    span.ChannelMatrix,
+			Pan:              span.Pan,
+			ChannelSelect:    span.ChannelSelect,
 		})
-		if span.ChannelAction != "unchanged" {
+		if span.ChannelAction == audiocodec.ActionUnchanged {
+			continue
+		}
+		switch {
+		case span.Pan != nil:
+			warnings = append(warnings, fmt.Sprintf("span %d applied %s pan=%.3f", span.Index, span.ChannelAction, *span.Pan))
+		case span.ChannelSelect != "":
+			warnings = append(warnings, fmt.Sprintf("span %d applied %s channel_select=%s", span.Index, span.ChannelAction, span.ChannelSelect))
+		default:
 			warnings = append(warnings, fmt.Sprintf("span %d applied %s", span.Index, span.ChannelAction))
 		}
 	}

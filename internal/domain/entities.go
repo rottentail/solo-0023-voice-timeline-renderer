@@ -17,12 +17,26 @@ type SourceAsset struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// Channel select values are accepted by TimelineSpan.ChannelSelect. They name
+// the single source channel that a stereo span must contribute.
+const (
+	ChannelSelectLeft  = "left"
+	ChannelSelectRight = "right"
+)
+
 type TimelineSpan struct {
 	SourceID         string  `json:"source_id"`
 	SourceStartFrame int64   `json:"source_start_frame"`
 	SourceEndFrame   int64   `json:"source_end_frame"`
 	GainDB           float64 `json:"gain_db"`
 	CrossfadeFrames  int64   `json:"crossfade_frames"`
+	// Pan positions a mono source inside a stereo output using an equal-power
+	// law. -1 is hard left, 0 is center, +1 is hard right. It is meaningful
+	// only for mono sources rendered to a stereo timeline.
+	Pan *float64 `json:"pan,omitempty"`
+	// ChannelSelect extracts one channel from a stereo source. It is
+	// meaningful only for stereo sources rendered to a stereo timeline.
+	ChannelSelect string `json:"channel_select,omitempty"`
 }
 
 type Timeline struct {
@@ -82,6 +96,14 @@ type ReceiptSpan struct {
 	CrossfadeFrames  int64   `json:"crossfade_frames"`
 	GainDB           float64 `json:"gain_db"`
 	ChannelAction    string  `json:"channel_action"`
+	// ChannelMatrix states the exact per-output-channel gains applied to each
+	// source channel. Rows are output channels and columns are source
+	// channels, so a stereo matrix contains four coefficients in the order
+	// outL<-inL, outL<-inR, outR<-inL, outR<-inR. It is recorded only for
+	// spans with an explicit pan or channel_select setting.
+	ChannelMatrix []float64 `json:"channel_matrix,omitempty"`
+	Pan           *float64  `json:"pan,omitempty"`
+	ChannelSelect string    `json:"channel_select,omitempty"`
 }
 
 type NormalizationReceipt struct {

@@ -25,6 +25,9 @@ type preparedSpan struct {
 	CrossfadeFrames  int64
 	GainDB           float64
 	ChannelAction    string
+	ChannelMatrix    []float64
+	Pan              *float64
+	ChannelSelect    string
 	Clip             *audiocodec.Clip
 }
 
@@ -58,9 +61,28 @@ func prepareSpans(
 		if err != nil {
 			return nil, 0, err
 		}
-		mapped, action, err := audiocodec.MapChannels(ctx, resampled, plan.OutputChannels)
-		if err != nil {
-			return nil, 0, err
+		var (
+			mapped        *audiocodec.Clip
+			action        string
+			channelMatrix []float64
+		)
+		if span.Pan != nil || span.ChannelSelect != "" {
+			if plan.OutputChannels != 2 {
+				return nil, 0, errors.New("explicit channel routing requires a stereo output")
+			}
+			routed, routedAction, matrix, routeErr := audiocodec.ApplyChannelRoute(ctx, resampled, audiocodec.ChannelRoute{
+				Pan:           span.Pan,
+				ChannelSelect: span.ChannelSelect,
+			})
+			if routeErr != nil {
+				return nil, 0, routeErr
+			}
+			mapped, action, channelMatrix = routed, routedAction, matrix
+		} else {
+			mapped, action, err = audiocodec.MapChannels(ctx, resampled, plan.OutputChannels)
+			if err != nil {
+				return nil, 0, err
+			}
 		}
 		frames := mapped.FrameCount()
 		if frames < 1 {
@@ -89,6 +111,9 @@ func prepareSpans(
 			CrossfadeFrames:  span.CrossfadeFrames,
 			GainDB:           span.GainDB,
 			ChannelAction:    action,
+			ChannelMatrix:    channelMatrix,
+			Pan:              span.Pan,
+			ChannelSelect:    span.ChannelSelect,
 			Clip:             mapped,
 		})
 	}

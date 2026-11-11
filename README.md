@@ -10,6 +10,8 @@ The implementation covers:
 - 16-bit integer PCM WAV validation and signal measurement.
 - Ordered timeline spans with source-frame selection, gain, and crossfade.
 - Linear sample-rate conversion and mono/stereo channel mapping.
+- Per-span equal-power `pan` for mono sources and `channel_select` extraction
+  for stereo sources, with the exact applied matrix recorded in the receipt.
 - Equal-power neighboring-span crossfades.
 - Peak normalization into a requested dBFS target.
 - Durable render states, receipts, and atomically committed output folders.
@@ -119,6 +121,52 @@ Spans are sequential. A later span overlaps its predecessor by
 `crossfade_frames`; the overlap is mixed with equal-power weights. A crossfade
 must fit within both neighboring spans.
 
+### Per-span channel routing
+
+Every span may declare an explicit channel decision. The two settings are
+mutually exclusive and only apply to stereo output timelines:
+
+- `pan` (`-1` hard left, `0` center, `1` hard right) positions a **mono**
+  source using an equal-power law
+  (`left = cos(theta)`, `right = sin(theta)`, `theta = (pan+1) * pi/4`).
+- `channel_select` (`"left"` or `"right"`) extracts one channel from a
+  **stereo** source; the other output channel stays silent.
+
+```json
+{
+  "source_id": "opening_take_01",
+  "source_start_frame": 0,
+  "source_end_frame": 48000,
+  "gain_db": -2,
+  "crossfade_frames": 0,
+  "pan": -0.3
+}
+```
+
+```json
+{
+  "source_id": "stereo_bed_01",
+  "source_start_frame": 0,
+  "source_end_frame": 24000,
+  "gain_db": 0,
+  "crossfade_frames": 0,
+  "channel_select": "left"
+}
+```
+
+Validation rejects an out-of-range or non-finite `pan`, an unknown
+`channel_select` value, both settings on one span, `pan` on a stereo source,
+`channel_select` on a mono source, and either setting on a mono-output
+timeline. A mono output always keeps the single timeline-wide downmix, so it
+never has an ambiguous per-span channel decision.
+
+A span that sets neither field keeps the timeline-wide default mapping
+(mono is duplicated to both channels; stereo is averaged on mono output).
+Timelines created before this feature carry neither field and therefore
+render byte-identical output. Because every coefficient is derived once from
+the stored plan, repeating a render of the same timeline produces the same
+bytes.
+
 ### Start a render
 
 `PUT /v1/renders/{render_id}`
@@ -144,7 +192,11 @@ output folder.
 
 The output route returns `audio/wav`. The receipt records source digests, span
 placement, channel mapping, measured peak and RMS amplitude, normalization
-gain, output digest, and non-fatal warnings.
+gain, output digest, and non-fatal warnings. For a span with explicit routing,
+the receipt also states the applied `channel_action`, the requested `pan` or
+`channel_select`, and the exact `channel_matrix` coefficients (rows are output
+L/R channels, columns are source L/R channels). Unconfigured spans omit the
+matrix and routing fields.
 
 ## Data directory
 
@@ -187,6 +239,7 @@ Run each declared production check from the repository root:
 go run ./cmd/timelinecheck -workflow ingest-audio-source
 go run ./cmd/timelinecheck -workflow compose-timeline
 go run ./cmd/timelinecheck -workflow render-mixdown
+go run ./cmd/timelinecheck -workflow channel-routing
 ```
 
 Each check creates an isolated temporary data directory, starts the real HTTP

@@ -82,9 +82,18 @@ func equivalentTimeline(left, right domain.Timeline) bool {
 			a.SourceStartFrame != b.SourceStartFrame ||
 			a.SourceEndFrame != b.SourceEndFrame ||
 			math.Abs(a.GainDB-b.GainDB) > 1e-9 ||
-			a.CrossfadeFrames != b.CrossfadeFrames {
+			a.CrossfadeFrames != b.CrossfadeFrames ||
+			a.ChannelSelect != b.ChannelSelect ||
+			!optionalFloatEqual(a.Pan, b.Pan) {
 			return false
 		}
 	}
 	return true
+}
+
+func optionalFloatEqual(left, right *float64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return math.Abs(*left-*right) <= 1e-9
 }

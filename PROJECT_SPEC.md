@@ -44,8 +44,15 @@ Invariants:
 ### Assembly timeline
 
 A timeline is an ordered set of spans over existing source assets. A span
-selects a half-open source frame interval, a gain in decibels, and an optional
-crossfade with the preceding span.
+selects a half-open source frame interval, a gain in decibels, an optional
+crossfade with the preceding span, and an optional explicit channel decision.
+
+Each span may set at most one of:
+
+- `pan`: positions a mono source inside a stereo output, from `-1` (hard
+  left) through `0` (center) to `1` (hard right), using an equal-power law.
+- `channel_select`: `left` or `right`, extracting one channel from a stereo
+  source into the matching stereo output channel while the other is silent.
 
 Invariants:
 
@@ -56,6 +63,14 @@ Invariants:
 - A crossfade cannot exceed the shorter neighboring span.
 - Output channel count is explicit and independent from an input source's
   channel count.
+- A span cannot set both `pan` and `channel_select`.
+- `pan` requires a finite value in `[-1, 1]` and a mono source.
+- `channel_select` requires a stereo source and a `left`/`right` value.
+- Explicit channel routing is accepted only for stereo output. A mono output
+  always uses the single timeline-wide downmix, so it can never carry an
+  ambiguous per-span channel decision.
+- A span without either setting keeps the timeline-wide default channel
+  mapping; older timelines therefore render unchanged, byte for byte.
 
 ### Render job
 
@@ -71,10 +86,10 @@ stores the output file, output metadata, and immutable render receipt.
 
 ### Render receipt
 
-A receipt records source identifiers, span placement, gain adjustments, peak
-and RMS measurements, final normalization gain, frame count, output digest, and
-non-fatal warnings. It is written only after the output bytes have been
-atomically committed.
+A receipt records source identifiers, span placement, gain adjustments, the
+exact per-span channel action and gain matrix, peak and RMS measurements,
+final normalization gain, frame count, output digest, and non-fatal warnings.
+It is written only after the output bytes have been atomically committed.
 
 ## Workflows
 
@@ -96,8 +111,8 @@ leaves no visible partial source.
 Entry point: `PUT /v1/timelines/{timeline_id}`.
 
 1. The HTTP boundary decodes and sizes the span list.
-2. Domain validation checks ranges, gain limits, crossfade limits, and temporal
-   ordering.
+2. Domain validation checks ranges, gain limits, crossfade limits, temporal
+   ordering, and every per-span channel routing rule.
 3. The service resolves every source reference from storage.
 4. A timeline record is persisted once all spans are valid.
 
@@ -110,9 +125,13 @@ Entry point: `PUT /v1/renders/{render_id}` with a `timeline_id` body field.
 
 1. The service creates a durable `queued` job.
 2. The renderer moves to `rendering` and loads all referenced sources.
-3. Each source interval is resampled to the timeline sample rate, mapped to the
-   requested channel layout, gain-adjusted, faded, and placed on the timeline.
+3. Each source interval is resampled to the timeline sample rate, routed to
+   the requested channel layout (default mapping, an equal-power pan, or a
+   single-channel extraction), gain-adjusted, faded, and placed on the
+   timeline in span order.
 4. Overlapping neighboring spans are mixed with equal-power crossfade weights.
+   Every coefficient is computed once from the stored plan, so replaying the
+   same render yields byte-identical output.
 5. The finalizing stage applies peak normalization to the requested target,
    writes a WAV and receipt through temporary files, and renames them into
    place atomically.
@@ -176,6 +195,10 @@ The runtime manifest exposes one bounded production smoke path per workflow:
   fails.
 - Render a crossfaded timeline, download the output, decode it, and match core
   receipt measurements.
+- Exercise per-span pan and channel extraction: verify the declared gain
+  matrix and the output channel placement, confirm two renders of the same
+  plan are byte-identical, and confirm illegal matrices, mono-output routing,
+  and conflicting span settings are rejected.
 
 These checks use the real HTTP entry points and local storage. They are not a
 replacement for the test suite that the later task stage will add.

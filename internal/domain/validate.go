@@ -90,6 +90,9 @@ func ValidateTimeline(plan Timeline, sources map[string]SourceAsset, maxSpans in
 		if math.IsNaN(span.GainDB) || math.IsInf(span.GainDB, 0) || span.GainDB < -36 || span.GainDB > 12 {
 			return E(KindInvalid, "invalid_gain", field+".gain_db", "gain must be finite and between -36 and 12 dB")
 		}
+		if err := ValidateSpanRouting(field, span, source.Channels, plan.OutputChannels); err != nil {
+			return err
+		}
 		if span.CrossfadeFrames < 0 {
 			return E(KindInvalid, "invalid_crossfade", field+".crossfade_frames", "crossfade cannot be negative")
 		}
@@ -117,6 +120,81 @@ func ValidateTimeline(plan Timeline, sources map[string]SourceAsset, maxSpans in
 		if cursor > maxOutputFrames {
 			return E(KindTooLarge, "timeline_too_long", "spans", "timeline output exceeds the configured frame limit")
 		}
+	}
+	return nil
+}
+
+// ValidateSpanRouting enforces the per-span channel routing rules. A span
+// without pan and without channel_select keeps the timeline-wide default
+// mapping and is always accepted. Explicit routing is a stereo-output feature
+// so that mono outputs never carry an ambiguous channel decision.
+func ValidateSpanRouting(field string, span TimelineSpan, sourceChannels, outputChannels int) error {
+	hasPan := span.Pan != nil
+	hasSelect := span.ChannelSelect != ""
+	if !hasPan && !hasSelect {
+		return nil
+	}
+	if hasPan && hasSelect {
+		return E(
+			KindInvalid,
+			"invalid_channel_route",
+			field+".channel_select",
+			"a span cannot combine pan and channel_select",
+		)
+	}
+	if outputChannels != 2 {
+		if hasPan {
+			return E(
+				KindInvalid,
+				"invalid_channel_route",
+				field+".pan",
+				"pan requires a stereo timeline; mono output keeps the default downmix",
+			)
+		}
+		return E(
+			KindInvalid,
+			"invalid_channel_route",
+			field+".channel_select",
+			"channel_select requires a stereo timeline; mono output keeps the default downmix",
+		)
+	}
+	if hasPan {
+		pan := *span.Pan
+		if math.IsNaN(pan) || math.IsInf(pan, 0) || pan < -1 || pan > 1 {
+			return E(
+				KindInvalid,
+				"invalid_pan",
+				field+".pan",
+				"pan must be finite and between -1 (left) and 1 (right)",
+			)
+		}
+		if sourceChannels != 1 {
+			return E(
+				KindInvalid,
+				"invalid_channel_route",
+				field+".pan",
+				"pan can only position a mono source; stereo sources already carry two channels",
+			)
+		}
+		return nil
+	}
+	switch span.ChannelSelect {
+	case ChannelSelectLeft, ChannelSelectRight:
+	default:
+		return E(
+			KindInvalid,
+			"invalid_channel_matrix",
+			field+".channel_select",
+			"channel_select must be \"left\" or \"right\"",
+		)
+	}
+	if sourceChannels != 2 {
+		return E(
+			KindInvalid,
+			"invalid_channel_route",
+			field+".channel_select",
+			"channel_select requires a stereo source; mono sources have only one channel",
+		)
 	}
 	return nil
 }

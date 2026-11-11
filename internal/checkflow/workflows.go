@@ -27,6 +27,8 @@ func Run(ctx context.Context, workflow string) error {
 		return runCompose(ctx, harness)
 	case "render-mixdown":
 		return runRender(ctx, harness)
+	case "channel-routing":
+		return runChannelRouting(ctx, harness)
 	default:
 		return fmt.Errorf("unknown workflow %q", workflow)
 	}
