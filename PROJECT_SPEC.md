@@ -44,8 +44,8 @@ Invariants:
 ### Assembly timeline
 
 A timeline is an ordered set of spans over existing source assets. A span
-selects a half-open source frame interval, a gain in decibels, and an optional
-crossfade with the preceding span.
+selects a half-open source frame interval, a gain in decibels, an optional
+crossfade with the preceding span, and an optional gain automation curve.
 
 Invariants:
 
@@ -56,6 +56,14 @@ Invariants:
 - A crossfade cannot exceed the shorter neighboring span.
 - Output channel count is explicit and independent from an input source's
   channel count.
+- A gain automation curve, when present, uses `"linear_db"` interpolation with
+  two to 256 strictly increasing breakpoints whose frames are output timeline
+  frames relative to the span start. The breakpoints must cover the whole span
+  (frame zero through the final output frame) and remain inside it.
+- Each automation breakpoint gain and the combined effective gain (static span
+  gain plus breakpoint gain) must be finite and within the `-36` to `12` dB
+  window. Invalid curves are rejected with a stable error rather than clamped
+  or shifted; no partial timeline is persisted.
 
 ### Render job
 
@@ -71,10 +79,12 @@ stores the output file, output metadata, and immutable render receipt.
 
 ### Render receipt
 
-A receipt records source identifiers, span placement, gain adjustments, peak
-and RMS measurements, final normalization gain, frame count, output digest, and
-non-fatal warnings. It is written only after the output bytes have been
-atomically committed.
+A receipt records source identifiers, span placement, gain adjustments, gain
+automation breakpoints with their effective decibel values and effective gain
+extrema, peak and RMS measurements, final normalization gain, frame count,
+output digest, and non-fatal warnings. It is written only after the output
+bytes have been atomically committed. Spans without an automation curve carry
+no automation block, so legacy receipts remain unchanged.
 
 ## Workflows
 
@@ -111,7 +121,8 @@ Entry point: `PUT /v1/renders/{render_id}` with a `timeline_id` body field.
 1. The service creates a durable `queued` job.
 2. The renderer moves to `rendering` and loads all referenced sources.
 3. Each source interval is resampled to the timeline sample rate, mapped to the
-   requested channel layout, gain-adjusted, faded, and placed on the timeline.
+   requested channel layout, gain-adjusted (static gain plus any automation
+   curve evaluated at output frames), faded, and placed on the timeline.
 4. Overlapping neighboring spans are mixed with equal-power crossfade weights.
 5. The finalizing stage applies peak normalization to the requested target,
    writes a WAV and receipt through temporary files, and renames them into
@@ -176,6 +187,10 @@ The runtime manifest exposes one bounded production smoke path per workflow:
   fails.
 - Render a crossfaded timeline, download the output, decode it, and match core
   receipt measurements.
+- Compose and render a timeline with gain automation curves across a resampled
+  and crossfaded span, verify the ramp in the output and the receipt gain facts,
+  confirm deterministic re-renders and unchanged legacy output, and confirm
+  malformed curves fail without persisting.
 
 These checks use the real HTTP entry points and local storage. They are not a
 replacement for the test suite that the later task stage will add.

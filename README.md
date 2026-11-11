@@ -11,6 +11,9 @@ The implementation covers:
 - Ordered timeline spans with source-frame selection, gain, and crossfade.
 - Linear sample-rate conversion and mono/stereo channel mapping.
 - Equal-power neighboring-span crossfades.
+- Persistent, per-span gain automation curves interpolated in decibel space and
+  anchored to output timeline frames so they survive resampling, cropping, and
+  crossfades.
 - Peak normalization into a requested dBFS target.
 - Durable render states, receipts, and atomically committed output folders.
 
@@ -119,6 +122,50 @@ Spans are sequential. A later span overlaps its predecessor by
 `crossfade_frames`; the overlap is mixed with equal-power weights. A crossfade
 must fit within both neighboring spans.
 
+### Gain automation
+
+A span may carry an optional `gain_automation` curve that replaces the audible
+"step" of several fixed-gain fragments with a smooth ramp. Breakpoint frames
+are expressed in **output timeline frames relative to the start of the span**
+(after the source interval is resampled and cropped), so the curve takes effect
+at the requested output time regardless of the source sample rate, and it is
+applied before the equal-power crossfade weights:
+
+```json
+{
+  "source_id": "opening_take_01",
+  "source_start_frame": 0,
+  "source_end_frame": 48000,
+  "gain_db": -2,
+  "crossfade_frames": 0,
+  "gain_automation": {
+    "interpolation": "linear_db",
+    "points": [
+      { "frame": 0,     "gain_db": -16 },
+      { "frame": 24000, "gain_db": -8  },
+      { "frame": 48000, "gain_db": 0   }
+    ]
+  }
+}
+```
+
+Rules enforced at timeline validation (any violation returns a stable
+`422` error and the timeline is never persisted or silently corrected):
+
+- `interpolation` must be `"linear_db"`; gain is interpolated linearly in
+  decibels between neighboring points.
+- A curve needs 2 to 256 points with strictly increasing `frame` values.
+- The first point must be at frame `0` and the last at the span's final output
+  frame; every frame must remain inside the span's output range.
+- Each point gain and the combined effective gain (`gain_db` plus the point
+  gain) must be finite and stay within the `-36` to `12` dB gain window.
+
+A span without `gain_automation` keeps its single fixed `gain_db`, and such
+legacy timelines render byte-identical output. The effective gain adds the
+static and automation decibels. The render receipt records every breakpoint
+with its effective decibel value, the interpolation mode, and the effective
+minimum and maximum gain reached on the span.
+
 ### Start a render
 
 `PUT /v1/renders/{render_id}`
@@ -187,11 +234,15 @@ Run each declared production check from the repository root:
 go run ./cmd/timelinecheck -workflow ingest-audio-source
 go run ./cmd/timelinecheck -workflow compose-timeline
 go run ./cmd/timelinecheck -workflow render-mixdown
+go run ./cmd/timelinecheck -workflow gain-automation
 ```
 
 Each check creates an isolated temporary data directory, starts the real HTTP
 handler, sends generated WAV inputs, and verifies read-back or rendered output.
-The checks are bounded and do not require network access.
+The checks are bounded and do not require network access. The gain-automation
+check additionally confirms curve persistence, output-time placement after
+resampling and crossfading, receipt gain facts, deterministic re-renders, and
+the rejection of malformed curves without persistence.
 
 ## Deferred test boundary
 

@@ -8,6 +8,14 @@ import (
 
 var resourceIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{2,63}$`)
 
+// Gain limits shared by static span gains and automation breakpoints.
+const (
+	MinGainDB         = -36.0
+	MaxGainDB         = 12.0
+	MaxGainPoints     = 256
+	GainInterpolation = "linear_db"
+)
+
 type SourceFacts struct {
 	SampleRate    int
 	Channels      int
@@ -87,7 +95,7 @@ func ValidateTimeline(plan Timeline, sources map[string]SourceAsset, maxSpans in
 				"source interval must be non-empty and remain inside the source frame count",
 			)
 		}
-		if math.IsNaN(span.GainDB) || math.IsInf(span.GainDB, 0) || span.GainDB < -36 || span.GainDB > 12 {
+		if math.IsNaN(span.GainDB) || math.IsInf(span.GainDB, 0) || span.GainDB < MinGainDB || span.GainDB > MaxGainDB {
 			return E(KindInvalid, "invalid_gain", field+".gain_db", "gain must be finite and between -36 and 12 dB")
 		}
 		if span.CrossfadeFrames < 0 {
@@ -100,6 +108,9 @@ func ValidateTimeline(plan Timeline, sources map[string]SourceAsset, maxSpans in
 		outputFrames := ScaledFrames(span.SourceEndFrame-span.SourceStartFrame, source.SampleRate, plan.SampleRate)
 		if outputFrames < 1 {
 			return E(KindInvalid, "empty_span_output", field+".source_end_frame", "source interval becomes empty at the timeline sample rate")
+		}
+		if err := validateGainAutomation(field, span, outputFrames); err != nil {
+			return err
 		}
 		if index > 0 {
 			if span.CrossfadeFrames > previousFrames || span.CrossfadeFrames > outputFrames {
@@ -126,6 +137,96 @@ func ScaledFrames(frameCount int64, sourceRate, targetRate int) int64 {
 		return 0
 	}
 	return int64(math.Round(float64(frameCount) * float64(targetRate) / float64(sourceRate)))
+}
+
+// validateGainAutomation enforces every automation constraint explicitly.
+// Invalid input is rejected with a stable error instead of being silently
+// clamped or normalized, so a persisted timeline always matches the request.
+// Curve frames use the span's output timeline (post-resample) coordinates,
+// ranging from 0 to outputFrames inclusive.
+func validateGainAutomation(field string, span TimelineSpan, outputFrames int64) error {
+	curve := span.GainAutomation
+	if curve == nil {
+		return nil
+	}
+	curveField := field + ".gain_automation"
+	if curve.Interpolation != GainInterpolation {
+		return E(
+			KindInvalid,
+			"invalid_automation_interpolation",
+			curveField+".interpolation",
+			"gain automation interpolation must be \""+GainInterpolation+"\"",
+		)
+	}
+	if len(curve.Points) < 2 {
+		return E(
+			KindInvalid,
+			"invalid_automation_curve",
+			curveField+".points",
+			"gain automation curve must contain at least two points",
+		)
+	}
+	if len(curve.Points) > MaxGainPoints {
+		return E(
+			KindInvalid,
+			"invalid_automation_curve",
+			curveField+".points",
+			"gain automation curve cannot contain more than 256 points",
+		)
+	}
+	previousFrame := int64(-1)
+	for index, point := range curve.Points {
+		pointField := curveField + ".points[" + intString(index) + "]"
+		if point.Frame < 0 || point.Frame > outputFrames {
+			return E(
+				KindInvalid,
+				"invalid_automation_time_range",
+				pointField+".frame",
+				"automation point frame must remain within the span output frame range",
+			)
+		}
+		if point.Frame <= previousFrame {
+			return E(
+				KindInvalid,
+				"invalid_automation_time_range",
+				pointField+".frame",
+				"automation point frames must be strictly increasing",
+			)
+		}
+		previousFrame = point.Frame
+		if math.IsNaN(point.GainDB) || math.IsInf(point.GainDB, 0) {
+			return E(KindInvalid, "invalid_automation_gain", pointField+".gain_db", "automation gain must be a finite number of decibels")
+		}
+		if point.GainDB < MinGainDB || point.GainDB > MaxGainDB {
+			return E(KindInvalid, "invalid_automation_gain", pointField+".gain_db", "automation gain must be between -36 and 12 dB")
+		}
+		effective := span.GainDB + point.GainDB
+		if effective < MinGainDB || effective > MaxGainDB {
+			return E(
+				KindInvalid,
+				"invalid_automation_gain",
+				pointField+".gain_db",
+				"combined span and automation gain must remain between -36 and 12 dB",
+			)
+		}
+	}
+	if curve.Points[0].Frame != 0 {
+		return E(
+			KindInvalid,
+			"invalid_automation_endpoint",
+			curveField+".points[0].frame",
+			"gain automation curve must start at frame 0 of the span",
+		)
+	}
+	if curve.Points[len(curve.Points)-1].Frame != outputFrames {
+		return E(
+			KindInvalid,
+			"invalid_automation_endpoint",
+			curveField+".points["+intString(len(curve.Points)-1)+"].frame",
+			"gain automation curve must end at the last output frame of the span",
+		)
+	}
+	return nil
 }
 
 func TimelineOutputFrames(plan Timeline, sources map[string]SourceAsset) int64 {

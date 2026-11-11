@@ -17,12 +17,32 @@ type SourceAsset struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// GainPoint is one breakpoint of a span's gain automation curve. Frame is
+// expressed in the span's output (timeline sample-rate) frames, relative to the
+// first frame of the span, so the curve keeps its timing after the source
+// interval is resampled and cropped. GainDB is the automation gain at that
+// frame; it is combined additively (in decibels) with the span's static
+// GainDB.
+type GainPoint struct {
+	Frame  int64   `json:"frame"`
+	GainDB float64 `json:"gain_db"`
+}
+
+// GainAutomation is a persistable piecewise-linear gain curve attached to a
+// span. Interpolation always runs in decibel space ("linear_db"). A nil
+// pointer means the span has no curve and keeps its fixed gain behavior.
+type GainAutomation struct {
+	Interpolation string      `json:"interpolation"`
+	Points        []GainPoint `json:"points"`
+}
+
 type TimelineSpan struct {
-	SourceID         string  `json:"source_id"`
-	SourceStartFrame int64   `json:"source_start_frame"`
-	SourceEndFrame   int64   `json:"source_end_frame"`
-	GainDB           float64 `json:"gain_db"`
-	CrossfadeFrames  int64   `json:"crossfade_frames"`
+	SourceID         string          `json:"source_id"`
+	SourceStartFrame int64           `json:"source_start_frame"`
+	SourceEndFrame   int64           `json:"source_end_frame"`
+	GainDB           float64         `json:"gain_db"`
+	CrossfadeFrames  int64           `json:"crossfade_frames"`
+	GainAutomation   *GainAutomation `json:"gain_automation,omitempty"`
 }
 
 type Timeline struct {
@@ -70,18 +90,37 @@ type RenderJob struct {
 	UpdatedAt     time.Time    `json:"updated_at"`
 }
 
+// ReceiptGainPoint records one persisted automation breakpoint exactly as it
+// was validated and applied, using output frames relative to the span start.
+type ReceiptGainPoint struct {
+	Frame       int64   `json:"frame"`
+	GainDB      float64 `json:"gain_db"`
+	EffectiveDB float64 `json:"effective_gain_db"`
+}
+
+// ReceiptGainAutomation makes the applied curve reproducible from the receipt:
+// the breakpoints, the interpolation space, and the effective (static span
+// gain plus automation gain) decibel extrema reached on the span.
+type ReceiptGainAutomation struct {
+	Interpolation      string             `json:"interpolation"`
+	Points             []ReceiptGainPoint `json:"points"`
+	EffectiveMinGainDB float64            `json:"effective_min_gain_db"`
+	EffectiveMaxGainDB float64            `json:"effective_max_gain_db"`
+}
+
 type ReceiptSpan struct {
-	Index            int     `json:"index"`
-	SourceID         string  `json:"source_id"`
-	SourceDigest     string  `json:"source_digest"`
-	SourceStartFrame int64   `json:"source_start_frame"`
-	SourceEndFrame   int64   `json:"source_end_frame"`
-	OutputStartFrame int64   `json:"output_start_frame"`
-	OutputEndFrame   int64   `json:"output_end_frame"`
-	OutputFrames     int64   `json:"output_frames"`
-	CrossfadeFrames  int64   `json:"crossfade_frames"`
-	GainDB           float64 `json:"gain_db"`
-	ChannelAction    string  `json:"channel_action"`
+	Index            int                    `json:"index"`
+	SourceID         string                 `json:"source_id"`
+	SourceDigest     string                 `json:"source_digest"`
+	SourceStartFrame int64                  `json:"source_start_frame"`
+	SourceEndFrame   int64                  `json:"source_end_frame"`
+	OutputStartFrame int64                  `json:"output_start_frame"`
+	OutputEndFrame   int64                  `json:"output_end_frame"`
+	OutputFrames     int64                  `json:"output_frames"`
+	CrossfadeFrames  int64                  `json:"crossfade_frames"`
+	GainDB           float64                `json:"gain_db"`
+	ChannelAction    string                 `json:"channel_action"`
+	GainAutomation   *ReceiptGainAutomation `json:"gain_automation,omitempty"`
 }
 
 type NormalizationReceipt struct {

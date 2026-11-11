@@ -103,6 +103,27 @@
         "render",
         "storage"
       ]
+    },
+    {
+      "id": "gain-automation",
+      "name": "Apply gain automation curves",
+      "entry": "PUT /v1/timelines/{timeline_id}",
+      "steps": [
+        "Validate curve interpolation, breakpoints, endpoints, and gain bounds",
+        "Persist the curve as timeline span metadata",
+        "Evaluate the curve at output frames during rendering and record gain facts in the receipt"
+      ],
+      "success": "Returns a render whose samples follow the requested output-time ramp with a receipt explaining every effective gain.",
+      "failure": "Malformed curves return a stable validation error and are never persisted or silently clamped.",
+      "verification": "The workflow check persists and renders curves across resampled and crossfaded spans, matches the measured ramp to the expected envelope, verifies receipt facts and deterministic bytes, and rejects malformed curves.",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "domain",
+        "audiocodec",
+        "render",
+        "storage"
+      ]
     }
   ]
 }

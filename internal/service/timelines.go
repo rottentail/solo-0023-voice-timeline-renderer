@@ -22,7 +22,7 @@ func (s *Service) CreateTimeline(ctx context.Context, id string, request Timelin
 		SampleRate:     request.SampleRate,
 		OutputChannels: request.OutputChannels,
 		TargetPeakDBFS: request.TargetPeakDBFS,
-		Spans:          append([]domain.TimelineSpan(nil), request.Spans...),
+		Spans:          cloneTimelineSpans(request.Spans),
 		State:          "validating",
 	}
 	existing, getErr := s.repo.GetTimeline(id)
@@ -82,7 +82,37 @@ func equivalentTimeline(left, right domain.Timeline) bool {
 			a.SourceStartFrame != b.SourceStartFrame ||
 			a.SourceEndFrame != b.SourceEndFrame ||
 			math.Abs(a.GainDB-b.GainDB) > 1e-9 ||
-			a.CrossfadeFrames != b.CrossfadeFrames {
+			a.CrossfadeFrames != b.CrossfadeFrames ||
+			!equalGainAutomation(a.GainAutomation, b.GainAutomation) {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneTimelineSpans(spans []domain.TimelineSpan) []domain.TimelineSpan {
+	cloned := append([]domain.TimelineSpan(nil), spans...)
+	for index := range cloned {
+		if spans[index].GainAutomation == nil {
+			continue
+		}
+		curve := *spans[index].GainAutomation
+		curve.Points = append([]domain.GainPoint(nil), spans[index].GainAutomation.Points...)
+		cloned[index].GainAutomation = &curve
+	}
+	return cloned
+}
+
+func equalGainAutomation(left, right *domain.GainAutomation) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	if left.Interpolation != right.Interpolation || len(left.Points) != len(right.Points) {
+		return false
+	}
+	for index := range left.Points {
+		if left.Points[index].Frame != right.Points[index].Frame ||
+			math.Abs(left.Points[index].GainDB-right.Points[index].GainDB) > 1e-9 {
 			return false
 		}
 	}

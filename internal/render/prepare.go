@@ -25,6 +25,7 @@ type preparedSpan struct {
 	CrossfadeFrames  int64
 	GainDB           float64
 	ChannelAction    string
+	GainAutomation   *domain.GainAutomation
 	Clip             *audiocodec.Clip
 }
 
@@ -66,6 +67,15 @@ func prepareSpans(
 		if frames < 1 {
 			return nil, 0, errors.New("span produced no output frames")
 		}
+		if span.GainAutomation != nil {
+			// The curve was validated against the planned output frame count.
+			// Resampling is deterministic and must produce the same count; a
+			// mismatch is a hard failure rather than a silent re-anchoring.
+			last := span.GainAutomation.Points[len(span.GainAutomation.Points)-1]
+			if last.Frame != frames {
+				return nil, 0, errors.New("gain automation curve does not cover the resampled span frames")
+			}
+		}
 
 		start := cursor
 		if index > 0 {
@@ -89,6 +99,7 @@ func prepareSpans(
 			CrossfadeFrames:  span.CrossfadeFrames,
 			GainDB:           span.GainDB,
 			ChannelAction:    action,
+			GainAutomation:   span.GainAutomation,
 			Clip:             mapped,
 		})
 	}

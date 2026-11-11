@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"time"
 
 	"voice-timeline-renderer/internal/audiocodec"
@@ -39,7 +40,7 @@ func buildReceipt(
 	receiptSpans := make([]domain.ReceiptSpan, 0, len(spans))
 	warnings := make([]string, 0)
 	for _, span := range spans {
-		receiptSpans = append(receiptSpans, domain.ReceiptSpan{
+		receiptSpan := domain.ReceiptSpan{
 			Index:            span.Index,
 			SourceID:         span.SourceID,
 			SourceDigest:     span.SourceDigest,
@@ -51,7 +52,11 @@ func buildReceipt(
 			CrossfadeFrames:  span.CrossfadeFrames,
 			GainDB:           span.GainDB,
 			ChannelAction:    span.ChannelAction,
-		})
+		}
+		if span.GainAutomation != nil {
+			receiptSpan.GainAutomation = buildAutomationReceipt(span)
+		}
+		receiptSpans = append(receiptSpans, receiptSpan)
 		if span.ChannelAction != "unchanged" {
 			warnings = append(warnings, fmt.Sprintf("span %d applied %s", span.Index, span.ChannelAction))
 		}
@@ -79,4 +84,36 @@ func framesToMilliseconds(frames int64, sampleRate int) int64 {
 		return 0
 	}
 	return int64(float64(frames) * 1000 / float64(sampleRate))
+}
+
+// buildAutomationReceipt turns the validated curve into receipt facts: every
+// breakpoint with its effective decibel value (static span gain plus
+// automation gain) and the effective extrema the curve reaches. With linear
+// dB interpolation the extrema of a segment occur at its endpoints, so the
+// breakpoint values describe the full gain envelope of the span.
+func buildAutomationReceipt(span preparedSpan) *domain.ReceiptGainAutomation {
+	curve := span.GainAutomation
+	points := make([]domain.ReceiptGainPoint, 0, len(curve.Points))
+	minimum := math.Inf(1)
+	maximum := math.Inf(-1)
+	for _, point := range curve.Points {
+		effective := span.GainDB + point.GainDB
+		if effective < minimum {
+			minimum = effective
+		}
+		if effective > maximum {
+			maximum = effective
+		}
+		points = append(points, domain.ReceiptGainPoint{
+			Frame:       point.Frame,
+			GainDB:      point.GainDB,
+			EffectiveDB: effective,
+		})
+	}
+	return &domain.ReceiptGainAutomation{
+		Interpolation:      curve.Interpolation,
+		Points:             points,
+		EffectiveMinGainDB: minimum,
+		EffectiveMaxGainDB: maximum,
+	}
 }

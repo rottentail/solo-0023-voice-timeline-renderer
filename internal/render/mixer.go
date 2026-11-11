@@ -17,8 +17,20 @@ func mixPrepared(ctx context.Context, spans []preparedSpan, totalFrames int64, c
 	}
 	mix := make([]float32, int(totalFrames)*channels)
 	for _, span := range spans {
-		gain := float32(audiocodec.DBToLinear(span.GainDB))
 		frames := span.Clip.FrameCount()
+		// When a curve is present, evaluate one linear gain factor per output
+		// frame once. Spans without a curve keep the single constant factor and
+		// the exact original arithmetic, so legacy projects render identical
+		// bytes.
+		var frameGains []float32
+		gain := float32(audiocodec.DBToLinear(span.GainDB))
+		if span.GainAutomation != nil {
+			frameGains = make([]float32, frames)
+			for frame := int64(0); frame < frames; frame++ {
+				totalDB := span.GainDB + automationGain(span.GainAutomation, frame)
+				frameGains[frame] = float32(audiocodec.DBToLinear(totalDB))
+			}
+		}
 		for frame := int64(0); frame < frames; frame++ {
 			if frame%4096 == 0 {
 				select {
@@ -35,10 +47,14 @@ func mixPrepared(ctx context.Context, spans []preparedSpan, totalFrames int64, c
 				incoming = float32(math.Sin(angle))
 				outgoing = float32(math.Cos(angle))
 			}
+			frameGain := gain
+			if frameGains != nil {
+				frameGain = frameGains[frame]
+			}
 			inStart := int(frame) * channels
 			outStart := int(span.OutputStartFrame+frame) * channels
 			for channel := 0; channel < channels; channel++ {
-				value := span.Clip.Samples[inStart+channel] * gain * incoming
+				value := span.Clip.Samples[inStart+channel] * frameGain * incoming
 				if span.CrossfadeFrames > 0 && frame < span.CrossfadeFrames {
 					mix[outStart+channel] *= outgoing
 				}
