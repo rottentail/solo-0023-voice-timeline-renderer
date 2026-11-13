@@ -32,6 +32,7 @@ func prepareSpans(
 	ctx context.Context,
 	plan domain.Timeline,
 	sources map[string]SourceInput,
+	trace *Trace,
 ) ([]preparedSpan, int64, error) {
 	decoded := make(map[string]*audiocodec.Clip, len(sources))
 	prepared := make([]preparedSpan, 0, len(plan.Spans))
@@ -49,6 +50,16 @@ func prepareSpans(
 			}
 			clip = parsed
 			decoded[span.SourceID] = parsed
+			if trace != nil {
+				trace.Sources = append(trace.Sources, SourceTrace{
+					SourceID:      span.SourceID,
+					BytesDigest:   bytesDigest(source.WAV),
+					DecodedFrames: parsed.FrameCount(),
+					SampleRate:    parsed.SampleRate,
+					Channels:      parsed.Channels,
+					PCMDigest:     pcmDigest(parsed.Samples),
+				})
+			}
 		}
 		selected, err := audiocodec.SliceFrames(ctx, clip, span.SourceStartFrame, span.SourceEndFrame)
 		if err != nil {
@@ -77,6 +88,26 @@ func prepareSpans(
 		end := start + frames
 		cursor = end
 
+		if trace != nil {
+			trace.Spans = append(trace.Spans, SpanTrace{
+				Index:             index,
+				SourceID:          span.SourceID,
+				SourceStartFrame:  span.SourceStartFrame,
+				SourceEndFrame:    span.SourceEndFrame,
+				TargetSampleRate:  plan.SampleRate,
+				ResampledFrames:   resampled.FrameCount(),
+				ResampledChannels: resampled.Channels,
+				ResampledDigest:   pcmDigest(resampled.Samples),
+				ChannelAction:     action,
+				MappedFrames:      frames,
+				MappedDigest:      pcmDigest(mapped.Samples),
+				OutputStartFrame:  start,
+				OutputFrames:      frames,
+				CrossfadeFrames:   span.CrossfadeFrames,
+				GainDB:            span.GainDB,
+				GainedDigest:      gainedDigest(mapped.Samples, span.GainDB),
+			})
+		}
 		prepared = append(prepared, preparedSpan{
 			Index:            index,
 			SourceID:         span.SourceID,

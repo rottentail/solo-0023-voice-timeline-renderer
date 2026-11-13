@@ -165,16 +165,37 @@ Source and render folders are assembled in `tmp/` and moved into place with one
 directory rename. Metadata updates use same-directory temporary files followed
 by rename.
 
+## Reproduction evidence and drills
+
+The service also ships a rehearsal toolchain for answering "can another machine
+reproduce this mixdown, and if not, which layer diverged?" It is documented in
+`docs/reproduction-convention.md` and never changes service behavior.
+
+```bash
+go run ./cmd/reprocheck -out ./var/repro-drill          # full drill + assertions
+go run ./cmd/reproverify -action verify -bundle <dir>   # third-party replay report
+go run ./cmd/reproverify -action audit  -bundle <dir>   # claim-only consistency audit
+go run ./cmd/reproverify -action fingerprint            # declare local toolchain
+```
+
+A replayable bundle carries the exact source WAV bytes, the timeline, the
+preserved historical receipt and output, and a toolchain fingerprint. Byte
+comparison is only admissible when the declared processing contract matches;
+otherwise only decoded-signal comparison applies.
+
 ## Source layout
 
 ```text
 cmd/voiceservice/       service entry point
 cmd/timelinecheck/      workflow execution entry point
+cmd/reprocheck/         reproduction drill (capture + layer attribution proof)
+cmd/reproverify/        third-party bundle audit/verify entry point
 internal/httpapi/       routing, request limits, JSON errors, media response
 internal/service/       workflow orchestration and idempotency
 internal/domain/        entities, validation, errors, and render transitions
 internal/audiocodec/    WAV handling, transforms, and signal measurement
 internal/render/        timeline preparation, mixing, normalization, receipt
+internal/repro/         evidence bundles, toolchain fingerprint, layered verify
 internal/storage/       atomic local repository
 internal/checkflow/     bounded production workflow checks
 ```
